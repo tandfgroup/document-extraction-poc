@@ -1,6 +1,21 @@
+# Secrets
 .env
-.venv/
+.env.*
+!.env.example
+
+# Python
 __pycache__/
-*.pyc
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# macOS
 .DS_Store
+
+# IDE
+.idea/
+.vscode/
+
+# Project output
 outputs/
