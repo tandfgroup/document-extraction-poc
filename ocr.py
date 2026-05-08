@@ -1,6 +1,7 @@
 import base64
 import json
 import os
+import re
 import sys
 import requests
 import markdown as md_lib
@@ -25,6 +26,13 @@ hr {{ border: none; border-top: 2px dashed #ccc; margin: 2rem 0; }}
 pre, code {{ background: #f6f8fa; padding: 0.1rem 0.3rem; border-radius: 4px; }}
 h1, h2, h3 {{ border-bottom: 1px solid #eee; padding-bottom: 0.2rem; }}
 </style>
+<script>
+window.MathJax = {{
+  tex: {{ inlineMath: [['$', '$'], ['\\\\(', '\\\\)']],
+          displayMath: [['$$', '$$'], ['\\\\[', '\\\\]']] }}
+}};
+</script>
+<script src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js" async></script>
 </head>
 <body>
 {body}
@@ -175,7 +183,20 @@ def _process_page(page: dict, images_dir: str, images_dirname: str, with_caption
             caption = _annotation_caption(img.get("image_annotation"))
             if caption:
                 md = md.replace(new_ref, new_ref + caption, 1)
+    md += _hyperlinks_block(page)
     return md
+
+
+def _hyperlinks_block(page: dict) -> str:
+    links = page.get("hyperlinks") or []
+    seen = []
+    for url in links:
+        if isinstance(url, str) and url not in seen and url not in page.get("markdown", ""):
+            seen.append(url)
+    if not seen:
+        return ""
+    items = "\n".join(f"- <{url}>" for url in seen)
+    return f"\n\n**Links on this page:**\n\n{items}\n"
 
 
 def _highlights_block(document_annotation) -> str:
@@ -194,6 +215,29 @@ def _highlights_block(document_annotation) -> str:
     return "\n".join(lines)
 
 
+_CITATION_CONTENT_RE = re.compile(r'^[\d,\s\-–—]+$')
+_BARE_SUPSUB_RE = re.compile(r'(?<!\$)([\^_])\{([^}]+)\}(?!\$)')
+_WRAPPED_SUPSUB_RE = re.compile(r'\$([\^_])\{([^}]+)\}\$')
+
+
+def _supsub_replace(match: "re.Match") -> str:
+    sym, content = match.group(1), match.group(2)
+    tag = "sup" if sym == "^" else "sub"
+    if _CITATION_CONTENT_RE.match(content):
+        return f"<{tag}>{content.strip()}</{tag}>"
+    return f"${sym}{{{content}}}$"
+
+
+_DASH_RANGE_RE = re.compile(r'(\d)--\s+(\d)')
+
+
+def _normalize_supsub(text: str) -> str:
+    text = _DASH_RANGE_RE.sub(r'\1--\2', text)
+    text = _WRAPPED_SUPSUB_RE.sub(_supsub_replace, text)
+    text = _BARE_SUPSUB_RE.sub(_supsub_replace, text)
+    return text
+
+
 def _write_outputs(pages: list, output_dir: str, base: str, images_dirname: str,
                    with_captions: bool, document_annotation=None):
     images_dir = os.path.join(output_dir, images_dirname)
@@ -205,7 +249,11 @@ def _write_outputs(pages: list, output_dir: str, base: str, images_dirname: str,
         f.write(full_markdown)
 
     html_path = os.path.join(output_dir, f"{base}.html")
-    body = md_lib.markdown(full_markdown, extensions=["tables", "fenced_code"])
+    body = md_lib.markdown(
+        _normalize_supsub(full_markdown),
+        extensions=["tables", "fenced_code", "smarty", "pymdownx.arithmatex", "pymdownx.magiclink"],
+        extension_configs={"pymdownx.arithmatex": {"generic": True}},
+    )
     with open(html_path, "w", encoding="utf-8") as f:
         f.write(HTML_TEMPLATE.format(title=base, body=body))
 
